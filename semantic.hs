@@ -1,55 +1,276 @@
 module Semantic where
 
 import Prelude hiding (foldr, foldl)
+
+import Control.Monad.Trans.State
+
+import Data.Maybe
 import Data.Foldable
 import Data.Traversable
 import Parser
 import qualified Data.IntMap as I
 
+import Unique
+import UniqueFM
 import Control.Monad
 
 type Type   = String
 type Parent = String
-type ClassDecls = Table String
 type InheritanceGraph = I.IntMap Int
-type ClassSyms = [(String, ClassSym)]
 
-data Graph k n
+data Env a b c = Env { envClasses   :: UniqueFM a
+                     , envFeatures  :: UniqueFM b
+                     , envLocals    :: UniqueFM c } 
 
-data InheritNode = InheritNode {inhKey :: Int
-                               ,inhType :: Type
-                               ,inhParent :: Maybe Int }
+type ClassSet a   = UniqueFM (Class a)
+type FeatureSet a = UniqueFM (Feature a)
+type LocalSet a   = UniqueFM (a, a, Maybe (Expr a))
 
-data AnoClass = AnoClass Class
+type StateTEnvName m a = StateT(Env (Class Name) (Feature Name) (Name, Name, Maybe (Expr Name))) m a
+type StateEnvName a = State (Env (Class Name) (Feature Name) (Name, Name, (Maybe (Expr Name)))) a
 
-data ClassSym = ClassSym {className :: String
-                         ,classParent :: Maybe String
-                         ,classVars :: [(String, String)]
-                         ,classMethods :: [(String, MethodSym)]} deriving Show
+failure :: String -> StateTEnvName (Either String) a
+failure msg = StateT $ \_ -> Left msg
 
-data MethodSym = MethodSym {methodName :: String
-                           ,methodType :: String
-                           ,methodParams :: [(String, String)]} deriving Show
+emptyEnv :: Env a b c
+emptyEnv = Env emptyUFM emptyUFM emptyUFM
 
-data Table a = Table {tableSeed :: Int
-                     ,tableMap  :: I.IntMap a}
+--namer :: StateEnvName (Program Name)
+--namer = error "todo"
 
-instance Show a => Show (Table a) where
-  show (Table _ as) = show as
+registerClass :: Class Name -> StateTEnvName (Either String) ()
+registerClass r@(Class name _ features) = do
+  exist <- memberOfClasses name
+  case exist of
+    True  -> failure $ "Class " ++ (nameLabel name) ++ " is already defined"
+    False -> do
+      insertIntoClasses r
+      traverse_ registerFeature features
 
-addSym :: a -> Table a -> Table a
-addSym a (Table seed as) = let table' = I.insert seed a as in Table (succ seed) table'
+registerFeature :: Feature Name -> StateTEnvName (Either String) ()
+registerFeature r@(Attr name typ expr) = do
+  exist <- memberOfFeatures name
+  case exist of
+    True  -> failure $ "Attribute " ++ (nameLabel name) ++ " is already defined"
+    False -> do
+      insertIntoFeatures r
+      traverse_ registerLocal expr
+registerFeature r@(Method name typ formals payload) = do
+  exist <- memberOfFeatures name
+  case exist of
+    True  -> failure $ "Method " ++ (nameLabel name) ++ " is already defined"
+    False -> do
+      insertIntoFeatures r
+      traverse_ registerFormal formals
+      registerLocal payload
 
-lookupSym :: Int -> Table a -> Maybe a
-lookupSym key (Table _ table) = I.lookup key table  
+registerFormal :: Formal Name -> StateTEnvName (Either String) ()
+registerFormal (Formal name typ) = do
+  exist <- memberOfLocales name
+  case exist of
+    True  -> failure $ "Local variable " ++ (nameLabel name) ++ " is already defined"
+    False -> insertIntoLocals name typ Nothing
 
-lookupByValue :: Eq v => v -> [(k, v)] -> Maybe (k, v)
-lookupByValue _ [] = Nothing
-lookupByValue v ((k, v'):xs)
-  | v == v'   = Just (k, v)
-  | otherwise = lookupByValue v xs
+registerLocal :: Expr Name -> StateTEnvName (Either String) ()
+registerLocal (Assign _ expr) = registerLocal expr
+registerLocal (StaticDispatch _ params) = traverse_ registerLocal params
+registerLocal (Block els) = traverse_ registerLocal els
+registerLocal (Cond predicate then_body else_body) = do
+  registerLocal predicate
+  registerLocal then_body
+  traverse_ registerLocal else_body
+registerLocal (Dispatch _ _ expr params) = do
+  registerLocal expr
+  traverse_ registerLocal params
+registerLocal (Let vars body) = do
+  traverse_ registerLetVar vars
+  registerLocal body
+    where
+      registerLetVar (name, typ, expr) = do
+        exist <- memberOfLocales name
+        case exist of
+          True  -> failure $ (nameLabel name) ++ " has been already defined in let expression"
+          False -> insertIntoLocals name typ expr
+registerLocal (Case scrutinee decls) = do
+  registerLocal scrutinee
+  traverse_ registerCaseVar decls
+    where
+      registerCaseVar (name, typ, expr) = insertIntoLocals name typ (Just expr)
+registerLocal (Loop left right) = (registerLocal left) >> (registerLocal right)
+registerLocal (Divide left right) = (registerLocal left) >> (registerLocal right)
+registerLocal (Eq left right) = (registerLocal left) >> (registerLocal right)
+registerLocal (Leq left right) = (registerLocal left) >> (registerLocal right)
+registerLocal (Lt left right) = (registerLocal left) >> (registerLocal right)
+registerLocal (Gt left right) = (registerLocal left) >> (registerLocal right)
+registerLocal (Geq left right) = (registerLocal left) >> (registerLocal right)
+registerLocal (Mul left right) = (registerLocal left) >> (registerLocal right)
+registerLocal (Plus left right) = (registerLocal left) >> (registerLocal right)
+registerLocal (Sub left right) = (registerLocal left) >> (registerLocal right)
+registerLocal (Comp expr) = registerLocal expr
+registerLocal (Isvoid expr) = registerLocal expr
+registerLocal (Neg expr) = registerLocal expr
+registerLocal (Tild expr) = registerLocal expr
+registerLocal (Not expr) = registerLocal expr
+registerLocal _ = return ()
+  
+getClassSet :: Monad m => StateTEnvName m (ClassSet Name)
+getClassSet = do
+  (Env classes _ _) <- get
+  return classes
 
+getFeatureSet :: Monad m => StateTEnvName m (FeatureSet Name)
+getFeatureSet = do
+  (Env _ features _) <- get
+  return features
 
+getLocalSet :: Monad m => StateTEnvName m (LocalSet Name)
+getLocalSet = do
+  (Env _ _ locals) <- get
+  return locals
+
+modFeatureSet :: Monad m => (FeatureSet Name -> FeatureSet Name) -> StateTEnvName m ()
+modFeatureSet f = do
+  r@(Env _ features _) <- get
+  put r{envFeatures = f features}
+
+modClassSet :: Monad m => (ClassSet Name -> ClassSet Name) -> StateTEnvName m ()
+modClassSet f = do
+  r@(Env classes _ _) <- get
+  put r{envClasses = f classes}
+
+modLocalSet :: Monad m => (LocalSet Name -> LocalSet Name) -> StateTEnvName m ()
+modLocalSet f = do
+  r@(Env _ _ locals) <- get
+  put r{envLocals = f locals}
+
+lookupClass :: Monad m => Name -> StateTEnvName m (Maybe (Class Name))
+lookupClass Name{nameUnique=unique} = do
+  classes <- getClassSet
+  return $ lookupUFM_u unique classes
+
+lookupFeature :: Monad m => Name -> StateTEnvName m (Maybe (Feature Name))
+lookupFeature Name{nameUnique=unique} = do
+  features <- getFeatureSet
+  return $ lookupUFM_u unique features
+
+lookupLocal :: Monad m => Name -> StateTEnvName m (Maybe (Name, Name, Maybe (Expr Name)))
+lookupLocal Name{nameUnique=unique} = do
+  locals <- getLocalSet
+  return $ lookupUFM_u unique locals
+
+insertIntoClasses :: Monad m => Class Name -> StateTEnvName m ()
+insertIntoClasses r@Class{className=name} = modClassSet (insertUFM_u (nameUnique name) r)
+
+insertIntoFeatures :: Monad m => Feature Name -> StateTEnvName m ()
+insertIntoFeatures feature = modFeatureSet (insertUFM_u (nameUnique $ featureName feature) feature)
+
+insertIntoLocals :: Monad m => Name -> Name -> Maybe (Expr Name) -> StateTEnvName m ()
+insertIntoLocals name typ expr = modLocalSet (insertUFM_u (nameUnique name) (name, typ, expr))
+
+memberOfClasses :: Monad m => Name -> StateTEnvName m Bool
+memberOfClasses = liftM isJust . lookupClass
+
+memberOfFeatures :: Monad m => Name -> StateTEnvName m Bool
+memberOfFeatures = liftM isJust . lookupFeature
+
+memberOfLocales :: Monad m => Name -> StateTEnvName m Bool
+memberOfLocales = liftM isJust . lookupLocal
+
+append_d :: String -> String -> String
+append_d prefix name = prefix ++ "$$" ++ name
+
+mkClassUnique :: Uniquable k => Class k -> Unique
+mkClassUnique Class{className=name} = getUnique name
+
+mkSimpleName :: String -> Name
+mkSimpleName name = Name name name (getUnique name) 
+
+mkName :: String -> String -> Name
+mkName label uid = Name label uid (getUnique uid)
+
+nameProgram :: Program String -> Program Name
+nameProgram = Program . fmap nameClass . programClasses
+
+nameClass :: Class String -> Class Name
+nameClass (Class name parent features) =
+  let nameName     = mkSimpleName name
+      parentName   = mkSimpleName parent
+      featuresName = fmap (nameFeature name) features
+  in Class nameName parentName featuresName
+
+nameFeature :: String -> Feature String -> Feature Name
+nameFeature prefix (Attr name typ expr) =
+  let prefix'  = append_d prefix name
+      nameName = mkName name prefix'
+      typName  = mkSimpleName typ
+      exprName = fmap (nameExpr prefix') expr
+  in Attr nameName typName exprName
+nameFeature prefix (Method name typ formals payload) =
+  let prefix'     = append_d prefix name 
+      nameName    = mkName name prefix'
+      typName     = mkSimpleName typ
+      formalsName = fmap (nameFormal prefix') formals
+      payloadName = (nameExpr prefix') payload
+  in Method nameName typName formalsName payloadName
+
+nameFormal :: String -> Formal String -> Formal Name
+nameFormal prefix (Formal name typ) =
+  let nameName = mkName name (append_d prefix name)
+      typName  = mkSimpleName typ
+  in Formal nameName typName 
+
+nameExpr :: String -> Expr String -> Expr Name
+nameExpr prefix expr =
+  case expr of
+    Assign name body -> Assign (mkName name $ append_d prefix name) (nameExpr prefix body)
+    Block exprs -> Block (fmap (nameExpr prefix) exprs)
+    Cond pred then_expr else_expr -> Cond (nameExpr prefix pred) (nameExpr prefix then_expr) (fmap (nameExpr prefix) else_expr)
+    Dispatch name cast on params -> Dispatch name (fmap mkSimpleName cast) (nameExpr prefix on) (fmap (nameExpr prefix) params)
+    Let vars body ->
+      let prefix' = append_d prefix "let"
+      in Let (fmap (nameLetVar prefix') vars) (nameExpr prefix' body)
+    Case scrutinee decls ->
+      let prefix' = append_d prefix "case"
+      in Case (nameExpr prefix scrutinee) (evalState (traverse (nameCaseVar_st prefix) decls) 1)
+    Divide left right -> Divide (nameExpr prefix left) (nameExpr prefix right)
+    Eq left right -> Eq (nameExpr prefix left) (nameExpr prefix right)
+    Leq left right -> Leq (nameExpr prefix left) (nameExpr prefix right)
+    Lt left right -> Lt (nameExpr prefix left) (nameExpr prefix right)
+    Gt left right -> Gt (nameExpr prefix left) (nameExpr prefix right)
+    Geq left right -> Geq (nameExpr prefix left) (nameExpr prefix right)
+    Mul left right -> Mul (nameExpr prefix left) (nameExpr prefix right)
+    Plus left right -> Plus (nameExpr prefix left) (nameExpr prefix right)
+    Sub left right -> Sub (nameExpr prefix left) (nameExpr prefix right)
+    Loop left right -> Loop (nameExpr prefix left) (nameExpr prefix right)
+    Comp body -> Comp $ nameExpr prefix body
+    Isvoid body -> Isvoid (nameExpr prefix body)
+    Tild body -> Tild (nameExpr prefix body)
+    Not body -> Not (nameExpr prefix body)
+    Neg body -> Neg (nameExpr prefix body)
+    New name -> New $ mkSimpleName name
+    Object name -> Object $ mkName name (append_d prefix name)
+    StaticDispatch name params -> StaticDispatch (mkSimpleName name) (fmap (nameExpr prefix) params)
+    BoolConst bool -> BoolConst bool
+    StringConst string -> StringConst string
+    IntConst int -> IntConst int
+
+nameLetVar :: String -> (String, String, Maybe (Expr String)) -> (Name, Name, Maybe (Expr Name))
+nameLetVar prefix (name, typ, expr) =
+  let prefix' = append_d prefix name
+  in (mkName name prefix', mkSimpleName typ, fmap (nameExpr prefix') expr)
+
+nameCaseVar_st :: String -> (String, String, Expr String) -> State Int (Name, Name, Expr Name)
+nameCaseVar_st prefix (name, typ, expr) = do
+  i <- get
+  let prefix' = (append_d prefix . append_d (show i)) name
+  put (succ i)
+  return (mkName name prefix', mkSimpleName typ, nameExpr prefix' expr)
+
+data Name = Name { nameLabel  :: String
+                 , nameHash   :: String  
+                 , nameUnique :: Unique } deriving Show
+
+{-
 objectClassSym =
   let abort_meth    = ("abort", MethodSym "abord" "Object" [])
       typename_meth = ("type_name", MethodSym "type_name" "String" [])
@@ -78,60 +299,10 @@ initClassSyms = [objectClassSym
                 ,intClassSym
                 ,stringClassSym
                 ,boolClassSym]
-
-validateInhGraph :: ClassSyms -> ClassSyms -> Either String ClassSyms
-validateInhGraph graph refs = let xs = graph ++ refs in fmap (const xs) (traverse (go xs . snd) graph)
-  where
-    go xs classSym = validateHierarchy classSym [] xs
-
-validateHierarchy :: ClassSym -> [(String, ())] -> ClassSyms -> Either String ()
-validateHierarchy ClassSym{className=name, classParent=(Just parent)} passed graph =
-  case lookup name passed of
-    Nothing -> maybe (Left $ "unknown class " ++ parent) (\sym -> validateHierarchy sym ((name, ()):passed) graph) (lookup parent graph)
-    Just _  -> Left $ "Cyclic inheritance dependency on " ++ name
-validateHierarchy _ _ _ = Right ()
+-}
 
 --semantic :: Alex (InheritanceGraph, ClassDecls)
 --semantic :: Alex [(String, ClassSym)]
-semantic :: Alex (Either String ClassSyms)
-semantic = liftM (validation . foldr go [] . getClasses) parser
-  where
-    getClasses (Program xs) = xs
-    validation graph = validateInhGraph graph initClassSyms
-    go (Class name parent features) acc = let (attrs, methods) = attr_methods features
-                                          in (name, ClassSym name (Just parent) attrs methods) : acc
 
-attr_methods :: [Feature] -> ([(String, String)], [(String, MethodSym)])
-attr_methods features = foldr go ([], []) features
-  where
-    go (Attr name typ _) (attrs, methods)           = ((name, typ):attrs, methods)
-    go (Method name formals typ _) (attrs, methods) = (attrs, (name, MethodSym name typ (methodFormalSym formals)):methods)
-
-methodFormalSym :: [Formal] -> [(String, String)]
-methodFormalSym = fmap (\(Formal name typ) -> (name, typ))
-
-classes :: Program -> ClassDecls
-classes (Program xs) = foldl go initClasseTable xs
-  where
-    go table (Class t p _) = addSym t table
-
-
-inheritanceGraph :: Program -> ClassDecls -> InheritanceGraph
-inheritanceGraph (Program xs) (Table _ decls) = go initInheritance xs
-  where
-    go inh_map [] = inh_map
-    go inh_map ((Class t p _):xs) = let (Just (type_index, _))  = lookupByValue t (I.assocs decls)
-                                        (Just (parent_index,_)) = lookupByValue p (I.assocs decls)
-                                        inh_map' = I.insert type_index parent_index inh_map
-                                    in go inh_map' xs
-
-rowGraph :: (InheritanceGraph, ClassDecls) -> String
-rowGraph (graph, r@(Table _ table)) = foldl go "" (I.keys table)
-  where
-    go acc classIndex = acc ++ "\n"  ++ (classGraph classIndex graph r)
-
-classGraph :: Int -> InheritanceGraph -> ClassDecls -> String
-classGraph 0 _ _ = "Object"
-classGraph classIndex graph table = let parent_index = graph I.! classIndex
-                                        (Just label) = lookupSym classIndex table
-                                    in label ++ " => " ++ (classGraph parent_index graph table)
+namer :: Alex (Program Name)
+namer = liftM nameProgram parser

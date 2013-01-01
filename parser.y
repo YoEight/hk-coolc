@@ -1,13 +1,13 @@
 {
-  module Parser (parser
-                ,lexerP
-                ,execute
-                ,Alex(..)
-                ,Program(..)
-                ,Class(..)
-                ,Feature(..)
-                ,Formal(..)
-                ,Expr(..)) where
+module Parser (parser
+              ,lexerP
+              ,execute
+              ,Alex(..)
+              ,Program(..)
+              ,Class(..)
+              ,Feature(..)
+              ,Formal(..)
+              ,Expr(..)) where
 
 import Prelude hiding (Ordering(..))
 import Lexer
@@ -94,7 +94,7 @@ Features : Feature ';' Features                               { $1 : $3 }
 Feature : Method                                              { $1 }
         | Attr                                                { $1 }
 
-Method : objectid '(' Formals ')' ':' typeid '{' MethodBody   { Method $1 $3 $6 $8 }
+Method : objectid '(' Formals ')' ':' typeid '{' MethodBody   { Method $1 $6 $3 $8 }
 
 MethodBody : Expr '}'                                         { $1 }
 
@@ -188,57 +188,53 @@ returnAlex :: a -> Alex a
 returnAlex = return
 
 type Line = Int
-type Name = String
-type Type = String
-type Parent = String
-type Predicate = Expr
-type Identifier = String
-type Init = Expr
-type Body = Expr
 
-data Program = Program [Class] deriving Show
-data Class = Class Type Parent [Feature] deriving Show
-data Feature = Attr Name Type (Maybe Expr) | Method Name [Formal] Type Expr deriving Show
-data Formal = Formal Name Type deriving Show
+data Program name = Program { programClasses :: [Class name] } deriving Show
 
-data Expr = Assign Name Expr
-          | Block [Expr]
-          | BoolConst Bool
-          | Comp Expr
-          | Cond Predicate Expr (Maybe Expr)
-          | Dispatch Name (Maybe Type) Expr [Expr]
-          | Divide Expr Expr
-          | Eq Expr Expr
-          | IntConst Int
-          | Isvoid Expr
-          | Leq Expr Expr
-          | Let [(Identifier, Type, Maybe Init)] Body 
-          | Loop Predicate Body
-          | Lt Expr Expr
-          | Gt Expr Expr
-          | Geq Expr Expr
-          | Mul Expr Expr
-          | Neg Expr
-          | New Type
-          | NoExpr
-          | Object Name
-          | Plus Expr Expr
-          | StaticDispatch Name [Expr]
-          | StringConst String
-          | Sub Expr Expr
-          | Tild Expr
-          | Not Expr
-          | Case Expr [(Name, Type, Expr)] deriving Show
+data Class name = Class {className :: name
+                        ,classParent :: name
+                        ,classFeatures :: [Feature name]} deriving Show
 
-makeName :: Token -> Name
-makeName (TYPE x) = x
-makeName (ID x)   = x
+data Feature name = Attr {featureName :: name
+                         ,featureType :: name  
+                         ,attrPayload :: (Maybe (Expr name))} 
+                  
+                  | Method {featureName :: name
+                           ,featureType :: name
+                           ,methodFormals :: [Formal name]
+                           ,methodPayload :: Expr name} deriving Show
 
-mkString :: Token -> String
-mkString (STRING x) = x
+data Formal name = Formal {formalName :: name
+                          ,formalType :: name} deriving Show
 
-makeInt :: Token -> Int
-makeInt (INT x) = x
+data Expr name = Assign name (Expr name)
+               | Block [Expr name]
+               | BoolConst Bool
+               | Comp (Expr name)
+               | Cond (Expr name) (Expr name) (Maybe (Expr name))
+               | Dispatch String (Maybe name) (Expr name) [Expr name]
+               | Divide (Expr name) (Expr name)
+               | Eq (Expr name) (Expr name)
+               | IntConst Int
+               | Isvoid (Expr name)
+               | Leq (Expr name) (Expr name)
+               | Let [(name, name, Maybe (Expr name))] (Expr name) 
+               | Loop (Expr name) (Expr name)
+               | Lt (Expr name) (Expr name)
+               | Gt (Expr name) (Expr name)
+               | Geq (Expr name) (Expr name)
+               | Mul (Expr name) (Expr name)
+               | Neg (Expr name)
+               | New name
+               | NoExpr
+               | Object name
+               | Plus (Expr name) (Expr name)
+               | StaticDispatch name [Expr name]
+               | StringConst String
+               | Sub (Expr name) (Expr name)
+               | Tild (Expr name)
+               | Not (Expr name)
+               | Case (Expr name) [(name, name, (Expr name))] deriving Show
 
 parseError t = do
   (_, l, c) <- getPosn
