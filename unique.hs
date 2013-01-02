@@ -5,7 +5,7 @@ module Unique where
 import Data.Int
 import Data.HashTable
 
-data Unique = MkUnique Int
+data Unique = MkUnique Int deriving Eq
 
 instance Show Unique where
   show (MkUnique x) = show x

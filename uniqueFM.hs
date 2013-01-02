@@ -1,5 +1,6 @@
 module UniqueFM where
 
+import Data.Maybe
 import qualified Data.IntMap as I
 
 import Unique
@@ -29,3 +30,9 @@ lookupUFM k m = lookupUFM_u (getUnique k) m
 
 lookupUFM_u :: Unique -> UniqueFM a -> Maybe a
 lookupUFM_u k (UFM m) = I.lookup (getKey k) m
+
+memberUFM :: Uniquable k => k -> UniqueFM a -> Bool
+memberUFM k = isJust . lookupUFM k 
+
+memberUFM_u :: Unique -> UniqueFM a -> Bool
+memberUFM_u k = isJust . lookupUFM_u k

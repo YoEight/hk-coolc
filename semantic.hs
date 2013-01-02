@@ -32,11 +32,43 @@ type StateEnvName a = State (Env (Class Name) (Feature Name) (Name, Name, (Maybe
 failure :: String -> StateTEnvName (Either String) a
 failure msg = StateT $ \_ -> Left msg
 
+object_name = mkSimpleName "Object"
+io_name = mkSimpleName "IO"
+string_name = mkSimpleName "String"
+int_name = mkSimpleName "Int"
+bool_name = mkSimpleName "Bool"
+
 emptyEnv :: Env a b c
 emptyEnv = Env emptyUFM emptyUFM emptyUFM
 
+checkInheritanceGraph :: Class Name -> State (UniqueFM (), ClassSet Name) (Maybe String)
+checkInheritanceGraph (Class _ parent _)
+  | isSystemClass parent = return Nothing
+  | otherwise = do
+    (passed_map, class_env) <- get
+    case memberUFM_u (nameUnique parent) passed_map  of
+      True  -> return $ Just $ "Cyclic class dependency on " ++ (nameLabel parent)
+      False -> case lookupUFM_u (nameUnique parent) class_env of
+        Nothing           -> return $ Just $ "Unknown class " ++ (nameLabel parent)
+        Just parent_class -> do
+          put (insertUFM_u (nameUnique parent) () passed_map, class_env)
+          checkInheritanceGraph parent_class
+          
 --namer :: StateEnvName (Program Name)
 --namer = error "todo"
+
+validateProgram :: Program Name -> StateTEnvName (Either String) ()
+validateProgram = traverse_ validateClass . programClasses
+
+validateClass :: Class Name -> StateTEnvName (Either String) ()
+validateClass named_class = do
+  class_env <- getClassSet
+  case evalState (checkInheritanceGraph named_class) (emptyUFM, class_env) of
+    Just msg -> failure msg
+    Nothing  -> return ()
+
+registerProgram :: Program Name -> StateTEnvName (Either String) ()
+registerProgram = traverse_ registerClass . programClasses
 
 registerClass :: Class Name -> StateTEnvName (Either String) ()
 registerClass r@(Class name _ features) = do
@@ -168,7 +200,11 @@ insertIntoLocals :: Monad m => Name -> Name -> Maybe (Expr Name) -> StateTEnvNam
 insertIntoLocals name typ expr = modLocalSet (insertUFM_u (nameUnique name) (name, typ, expr))
 
 memberOfClasses :: Monad m => Name -> StateTEnvName m Bool
-memberOfClasses = liftM isJust . lookupClass
+memberOfClasses  = liftM isJust . lookupClass
+
+isSystemClass :: Name -> Bool
+isSystemClass name =
+  name == object_name || name == io_name || name == string_name || name == int_name || name == bool_name
 
 memberOfFeatures :: Monad m => Name -> StateTEnvName m Bool
 memberOfFeatures = liftM isJust . lookupFeature
@@ -270,6 +306,9 @@ data Name = Name { nameLabel  :: String
                  , nameHash   :: String  
                  , nameUnique :: Unique } deriving Show
 
+instance Eq Name where
+ Name _ _ l == Name _ _ r = l == r
+
 {-
 objectClassSym =
   let abort_meth    = ("abort", MethodSym "abord" "Object" [])
@@ -304,5 +343,9 @@ initClassSyms = [objectClassSym
 --semantic :: Alex (InheritanceGraph, ClassDecls)
 --semantic :: Alex [(String, ClassSym)]
 
-namer :: Alex (Program Name)
-namer = liftM nameProgram parser
+namer :: Alex (Either String ())
+namer = liftM go parser
+  where
+    go program = let named_program = nameProgram program
+                     procedure     = registerProgram named_program >> validateProgram named_program
+                 in evalStateT procedure emptyEnv
