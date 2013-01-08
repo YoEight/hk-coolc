@@ -1,11 +1,13 @@
 {
 module Parser (parser
               ,lexerP
+              ,alexError
               ,execute
               ,Alex(..)
               ,Program(..)
               ,Class(..)
-              ,Feature(..)
+              ,Attr(..)
+              ,Method(..)
               ,Formal(..)
               ,Expr(..)) where
 
@@ -83,7 +85,7 @@ Classes : Class ';' ClassList                                 { $1 : $3 }
 ClassList : Classes                                           { $1 }
           |                                                   { [] }
 
-Class : class typeid Parent '{' Features                      { Class $2 $3 $5 } 
+Class : class typeid Parent '{' Features                      { mkClass (Class $2 $3) $5 } 
 
 Parent : inherits typeid                                      { $2 }
        |                                                      { "Object" }
@@ -91,8 +93,8 @@ Parent : inherits typeid                                      { $2 }
 Features : Feature ';' Features                               { $1 : $3 }
          | '}'                                                { [] }
 
-Feature : Method                                              { $1 }
-        | Attr                                                { $1 }
+Feature : Method                                              { Right $1 }
+        | Attr                                                { Left  $1 }
 
 Method : objectid '(' Formals ')' ':' typeid '{' MethodBody   { Method $1 $6 $3 $8 }
 
@@ -104,7 +106,10 @@ Formals : Formal ',' Formals                                  { $1 : $3 }
 
 Formal  : objectid ':' typeid                                 { Formal $1 $3 }
 
-Attr : objectid ':' typeid                                    { Attr $1 $3 Nothing }
+Attr : objectid ':' typeid AttrBody                           { Attr $1 $3 $4 }
+
+AttrBody : '<-' Expr1                                         { Just $2 }
+         |                                                    { Nothing }
 
 Assign : objectid '<-' Expr1                                  { Assign $1 $3 }
 
@@ -191,50 +196,61 @@ type Line = Int
 
 data Program name = Program { programClasses :: [Class name] } deriving Show
 
-data Class name = Class {className :: name
-                        ,classParent :: name
-                        ,classFeatures :: [Feature name]} deriving Show
+data Class name = Class { className     :: String
+                        , classParent   :: String
+                        , classAttrs    :: [Attr name]
+                        , classMethods  :: [Method name]} deriving Show
 
-data Feature name = Attr {featureName :: name
-                         ,featureType :: name  
-                         ,attrPayload :: (Maybe (Expr name))} 
-                  
-                  | Method {featureName :: name
-                           ,featureType :: name
-                           ,methodFormals :: [Formal name]
-                           ,methodPayload :: Expr name} deriving Show
+data Attr name = Attr { attrName    :: String 
+                      , attrTyp     :: String
+                      , attrPayload :: Maybe (Expr name)} deriving Show
 
-data Formal name = Formal {formalName :: name
-                          ,formalType :: name} deriving Show
+data Method name = Method { methodName    :: String 
+                          , methodType    :: String
+                          , methodFormals :: [Formal]
+                          , methodPayload :: Expr name } deriving Show
 
-data Expr name = Assign name (Expr name)
+data Formal = Formal { formalName :: String
+                     , formalType :: String} deriving Show
+
+data Expr name = Assign String (Expr name)
                | Block [Expr name]
                | BoolConst Bool
                | Comp (Expr name)
                | Cond (Expr name) (Expr name) (Maybe (Expr name))
-               | Dispatch String (Maybe name) (Expr name) [Expr name]
+               | Dispatch String (Maybe String) (Expr name) [Expr name]
                | Divide (Expr name) (Expr name)
                | Eq (Expr name) (Expr name)
                | IntConst Int
                | Isvoid (Expr name)
                | Leq (Expr name) (Expr name)
-               | Let [(name, name, Maybe (Expr name))] (Expr name) 
+               | Let [(String, String, Maybe (Expr name))] (Expr name) 
                | Loop (Expr name) (Expr name)
                | Lt (Expr name) (Expr name)
                | Gt (Expr name) (Expr name)
                | Geq (Expr name) (Expr name)
                | Mul (Expr name) (Expr name)
                | Neg (Expr name)
-               | New name
+               | New String
                | NoExpr
                | Object name
                | Plus (Expr name) (Expr name)
-               | StaticDispatch name [Expr name]
+               | StaticDispatch String [Expr name]
                | StringConst String
                | Sub (Expr name) (Expr name)
                | Tild (Expr name)
                | Not (Expr name)
-               | Case (Expr name) [(name, name, (Expr name))] deriving Show
+               | Case (Expr name) [(String, String, (Expr name))] deriving Show
+
+mkClass :: ([Attr String] -> [Method String] -> Class String)
+           -> [Either (Attr String) (Method String)]
+           -> Class String
+mkClass f xs = 
+  let (attrs, meths) = foldr go ([], []) xs
+  in f attrs meths
+    where
+      go (Left  a) (as, ms) = (a:as, ms)
+      go (Right m) (as, ms) = (as, m:ms)
 
 parseError t = do
   (_, l, c) <- getPosn
