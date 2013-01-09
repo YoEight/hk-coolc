@@ -32,14 +32,15 @@ data Name = Name { nameLabel  :: String
                  , nameHash   :: String  
                  , nameUnique :: Unique } deriving Show
 
-data Object a = Obj { objectValue :: a
+data Object a = Obj { objectName  :: String
+                    , objectTyp   :: String 
                     , objectExpr  :: Maybe (Expr a)} deriving Show
 
-data Scoped a = Scoped { scopedValue   :: a
-                       , scopedClasses :: UniqueFM (Class a)
-                       , scopedAttrs   :: UniqueFM (Attr a)
-                       , scopedMethods :: UniqueFM (Method a)
-                       , scopedObjects :: UniqueFM (Object a) } deriving Show
+data Scoped a = Scoped { scopedValue     :: a
+                       , scopedCurrClass :: Class String
+                       , scopedClasses   :: UniqueFM (Class a)
+                       , scopedMethods   :: UniqueFM (Method a)
+                       , scopedObjects   :: UniqueFM (Object a) } deriving Show
 
 data CompilerError = Runtime
                    | ClassDuplicate String
@@ -58,7 +59,6 @@ data CompilerError = Runtime
 data ScopedEnv = SPEnv { spCurrentClass :: Class String
                        , spClassMap     :: ClassMap String
                        , spMethodMap    :: MethodMap String
-                       , spAttrMap      :: AttrMap String
                        , spObjMap       :: ObjectMap String}
 
 instance Show CompilerError where
@@ -69,7 +69,7 @@ instance Show CompilerError where
   show (DuplicateFormalDeclaration name) = "Formal parameter " ++ name ++ " is already declared"
   show (DuplicateVarDeclaration name) = "Variable " ++ name ++ " is already declared"
   show (DuplicateAttrDeclaration name) = "Attribute " ++ name ++ " is already declared"
-  show (DuplicateMethodDeclaration name) = "Method " ++ name ++ "is already declared"
+  show (DuplicateMethodDeclaration name) = "Method " ++ name ++ " is already declared"
   show (UnknownVariable name) = "Variable " ++ name ++ " is unknown"
   show (UnknownMethod name cName) = "Method " ++ name ++ " is unknown on class " ++ cName
   show InvalidIdDeclaration = "You can't declare a variable/attribute/method \"self\""
@@ -129,9 +129,8 @@ collectClasses = flip execStateT emptyUFM . traverse_ go . programClasses
   where
     go c@(Class name _ _ _) = do
       class_map <- get
-      case memberUFM name class_map of
-        True  -> throwError (ClassDuplicate name)
-        False -> put (insertUFM name c class_map)
+      when (memberUFM name class_map) (throwError $ ClassDuplicate name)
+      put (insertUFM name c class_map)
 
 illegalInheritance :: String -> Bool
 illegalInheritance "String" = True
@@ -209,7 +208,8 @@ collectClassObjects c@(Class n p cAttrs cMeths) = do
   elders               <- validateClassGraph c
   (attr_map, meth_map) <- foldrM operation init_state ((getUnique n):elders)
   class_map            <- ask
-  let init_sp_env = SPEnv c class_map meth_map attr_map emptyUFM
+  let toObj (Attr name typ p) = Obj name typ p
+      init_sp_env = SPEnv c class_map meth_map (fmap toObj attr_map)
   cAttrs'              <- runReaderT (traverse collectAttrObjects cAttrs) init_sp_env
   cMeths'              <- runReaderT (traverse collectMethodObjects cMeths) init_sp_env
   return (Class n p cAttrs' cMeths')
@@ -244,9 +244,9 @@ collectMethodObjects :: (MonadError CompilerError m, MonadReader ScopedEnv m, Ap
                         -> m (Method (Scoped String))
 collectMethodObjects (Method name typ formals body) = do
   checkTypeDecl typ
-  object_map  <- asks spObjMap
-  object_map' <- foldrM collectFormalObjects object_map formals
-  body'       <- local (\e -> e{spObjMap=object_map'}) (collectExprObjects body)
+  object_map   <- asks spObjMap
+  formal_decls <- foldrM collectFormalObjects emptyUFM formals
+  body'        <- local (\e -> e{spObjMap=unionUFM_u formal_decls object_map}) (collectExprObjects body)
   return (Method name typ formals body')
     where
       collectFormalObjects (Formal name typ) object_map = do
@@ -254,9 +254,8 @@ collectMethodObjects (Method name typ formals body) = do
         class_map <- asks spClassMap
         let existInClassEnv = memberUFM typ class_map
         when (not existInClassEnv) (throwError $ UnknownClass typ)
-        case memberUFM name object_map of
-          True  -> throwError (DuplicateAttrDeclaration name)
-          False -> return (insertUFM name (Obj name Nothing) object_map)
+        when (memberUFM name object_map) (throwError $ DuplicateVarDeclaration name)
+        return (insertUFM name (Obj name typ Nothing) object_map)
 
 collectExprObjects :: (MonadError CompilerError m, MonadReader ScopedEnv m, Applicative m)
                       => Expr String
@@ -264,21 +263,17 @@ collectExprObjects :: (MonadError CompilerError m, MonadReader ScopedEnv m, Appl
 collectExprObjects expr =
   case expr of
     Assign name expr -> do
+      curr_class <- asks spCurrentClass
       object_map <- asks spObjMap
-      attr_map   <- asks spAttrMap
+      meth_map   <- asks spMethodMap
+      class_map  <- asks spClassMap
       let inObjMap  = memberUFM name object_map
-          inAttrMap = memberUFM name attr_map
-      if inObjMap || inAttrMap
-        then fmap (Assign name) (collectExprObjects expr)
-        else throwError (UnknownVariable name)
+      when (not inObjMap) (throwError $ UnknownVariable name)
+      fmap (Assign (Scoped name curr_class class_map meth_map object_map)) (collectExprObjects expr)
     Block exprs -> fmap Block (traverse collectExprObjects exprs)
     BoolConst b -> return (BoolConst b)
     Comp expr   -> fmap Comp (collectExprObjects expr)
-    Cond p t e  -> do
-      p' <- collectExprObjects p
-      t' <- collectExprObjects t
-      e' <- traverse collectExprObjects e
-      return (Cond p' t' e')
+    Cond p t e  -> Cond <$> collectExprObjects p <*> collectExprObjects t <*> (traverse collectExprObjects e)
     Dispatch name cast target params -> do
       traverse_ validCast cast
       target' <- collectExprObjects target
@@ -287,23 +282,9 @@ collectExprObjects expr =
         where
           validCast name = do
             class_map <- asks spClassMap
-            case memberUFM name class_map of
-              True  -> return ()
-              False -> throwError (UnknownClass name)  
-    Divide l r -> do
-      l' <- collectExprObjects l
-      r' <- collectExprObjects r
-      return (Divide l' r')
-    Eq l r -> do
-      l' <- collectExprObjects l
-      r' <- collectExprObjects r
-      return (Eq l' r')
+            when (not (memberUFM name class_map)) (throwError $ UnknownClass name)
     IntConst i -> return $ IntConst i
     Isvoid expr -> fmap Isvoid (collectExprObjects expr)
-    Leq l r -> do
-      l' <- collectExprObjects l
-      r' <- collectExprObjects r
-      return (Leq l' r')
     Let vars body -> do
       env                     <- ask
       (vars', object_map', (_ :: ())) <- runRWST (traverse go vars) env emptyUFM 
@@ -315,66 +296,44 @@ collectExprObjects expr =
             checkTypeDecl typ
             object_map <- asks spObjMap
             let_vars   <- get
-            case memberUFM name let_vars of
-              True  -> throwError (DuplicateVarDeclaration name)
-              False -> do
-                let let_vars' = insertUFM name (Obj name payload) let_vars
-                payload' <- traverse (local (\e -> e{spObjMap=(unionUFM_u let_vars' object_map)}) . collectExprObjects) payload
-                put let_vars'
-                return (name, typ, payload')
-    Loop l r -> do
-      l' <- collectExprObjects l
-      r' <- collectExprObjects r
-      return (Loop l' r')
-    Lt l r -> do
-      l' <- collectExprObjects l
-      r' <- collectExprObjects r
-      return (Lt l' r')
-    Gt l r -> do
-      l' <- collectExprObjects l
-      r' <- collectExprObjects r
-      return (Gt l' r')
-    Geq l r -> do
-      l' <- collectExprObjects l
-      r' <- collectExprObjects r
-      return (Geq l' r')
-    Mul l r -> do
-      l' <- collectExprObjects l
-      r' <- collectExprObjects r
-      return (Mul l' r')
+            when (memberUFM name let_vars) (throwError $ DuplicateVarDeclaration name)
+            let let_vars' = insertUFM name (Obj name typ payload) let_vars
+            payload' <- traverse (local (\e -> e{spObjMap=(unionUFM_u let_vars' object_map)}) . collectExprObjects) payload
+            put let_vars'
+            return (name, typ, payload')
+    Divide l r -> Divide <$> collectExprObjects l <*> collectExprObjects r
+    Eq l r -> Eq <$> collectExprObjects l <*> collectExprObjects r
+    Leq l r -> Leq <$> collectExprObjects l <*> collectExprObjects r
+    Loop l r -> Loop <$> collectExprObjects l <*> collectExprObjects r
+    Lt l r -> Lt <$> collectExprObjects l <*> collectExprObjects r
+    Gt l r -> Gt <$> collectExprObjects l <*> collectExprObjects r
+    Geq l r -> Geq <$> collectExprObjects l <*> collectExprObjects r
+    Mul l r -> Mul <$> collectExprObjects l <*> collectExprObjects r
+    Plus l r -> Plus <$> collectExprObjects l <*> collectExprObjects r
+    Sub l r -> Sub <$> collectExprObjects l <*> collectExprObjects r
     Neg expr -> fmap Neg (collectExprObjects expr)
     New name -> do
       class_map <- asks spClassMap
-      if memberUFM name class_map
-        then return (New name)
-        else throwError (UnknownClass name)
+      when (not (memberUFM name class_map)) (throwError $ UnknownClass name)
+      return (New name)
     NoExpr -> return NoExpr
     Object name -> do
-      attr_map   <- asks spAttrMap
+      curr_class <- asks spCurrentClass
       object_map <- asks spObjMap
       meth_map   <- asks spMethodMap
       class_map  <- asks spClassMap
-      let inAttrMap = memberUFM name attr_map
-          inObjMap  = memberUFM name object_map
+      let inObjMap  = memberUFM name object_map
           isSelf    = "self" == name
-      if inObjMap || inAttrMap || isSelf
-        then return (Object (Scoped name class_map attr_map meth_map object_map))
-        else throwError (UnknownVariable name)
-    Plus l r -> do
-      l' <- collectExprObjects l
-      r' <- collectExprObjects r
-      return (Plus l' r')
+      when (not inObjMap && not isSelf) (throwError $ UnknownVariable name)
+      return (Object (Scoped name curr_class class_map meth_map object_map))
     StaticDispatch name params -> do
       current_class <- asks spCurrentClass
+      class_map     <- asks spClassMap
       meth_map      <- asks spMethodMap
-      case memberUFM name meth_map of
-        False -> throwError (UnknownMethod name (className current_class))
-        True  -> fmap (StaticDispatch name) (traverse collectExprObjects params)
+      object_map    <- asks spObjMap
+      when (not (memberUFM name meth_map)) (throwError (UnknownMethod name (className current_class)))
+      fmap (StaticDispatch (Scoped name current_class class_map meth_map object_map)) (traverse collectExprObjects params)
     StringConst s -> return $ StringConst s
-    Sub l r -> do
-      l' <- collectExprObjects l
-      r' <- collectExprObjects r
-      return (Sub l' r')
     Tild expr -> fmap Tild (collectExprObjects expr)
     Not expr -> fmap Not (collectExprObjects expr)
     Case scrutinee decls -> do
@@ -386,7 +345,7 @@ collectExprObjects expr =
             checkIdDecl name
             checkTypeDecl typ
             object_map <- asks spObjMap
-            expr'      <- local (\e -> e{spObjMap = insertUFM name (Obj name (Just expr)) object_map}) (collectExprObjects expr)
+            expr'      <- local (\e -> e{spObjMap = insertUFM name (Obj name typ (Just expr)) object_map}) (collectExprObjects expr)
             return (name, typ, expr')
 
 namer :: Alex (Program (Scoped String))

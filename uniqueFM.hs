@@ -1,3 +1,5 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
 module UniqueFM where
 
 import Data.Monoid
@@ -6,11 +8,7 @@ import qualified Data.IntMap as I
 
 import Unique
 
-newtype UniqueFM a = UFM { unUFM :: I.IntMap a } deriving Show
-
-instance Monoid (UniqueFM a) where
-  mempty = UFM mempty
-  mappend (UFM l) (UFM r) = UFM (mappend l r)
+newtype UniqueFM a = UFM { unUFM :: I.IntMap a } deriving (Show, Functor, Monoid)
 
 emptyUFM :: UniqueFM a
 emptyUFM = UFM I.empty
@@ -53,3 +51,6 @@ updateUFM f k m = updateUFM_u f (getUnique k) m
 
 updateUFM_u :: (a -> Maybe a) -> Unique -> UniqueFM a -> UniqueFM a
 updateUFM_u f k (UFM m) = UFM $ I.update f (getKey k) m
+
+elemsUFM :: UniqueFM a -> [a]
+elemsUFM (UFM m) = I.elems m

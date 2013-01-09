@@ -213,7 +213,7 @@ data Method name = Method { methodName    :: String
 data Formal = Formal { formalName :: String
                      , formalType :: String} deriving Show
 
-data Expr name = Assign String (Expr name)
+data Expr name = Assign name (Expr name)
                | Block [Expr name]
                | BoolConst Bool
                | Comp (Expr name)
@@ -235,7 +235,7 @@ data Expr name = Assign String (Expr name)
                | NoExpr
                | Object name
                | Plus (Expr name) (Expr name)
-               | StaticDispatch String [Expr name]
+               | StaticDispatch name [Expr name]
                | StringConst String
                | Sub (Expr name) (Expr name)
                | Tild (Expr name)
