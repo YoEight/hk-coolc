@@ -122,15 +122,16 @@ sysClassMap = listToUFM [("Object", objectClass)
                         ,("String", stringClass)
                         ,("Bool", boolClass)]
 
-collectProgramObjects :: (MonadError CompilerError m, Applicative m)
-                         => Program String
-                         -> m (Program (Scoped String))
-collectProgramObjects program = do
+typecheckProgram :: (MonadError CompilerError m, Applicative m)
+                    => Program String
+                    -> m (Program (Scoped (String, Type)))
+typecheckProgram program = do
   class_map <- collectClasses program
   let class_map' = unionUFM_u sysClassMap class_map
   classes   <- runReaderT (traverse collectClassObjects (programClasses program)) class_map'
---  let enrich_class_map = listToUFM $ fmap (\c -> (className c, c)) classes
-  return (Program classes)
+  let enrich_class_map = listToUFM $ fmap (\c -> (className c, c)) classes
+  typecheck_classes <- runReaderT (traverse typecheckClass classes) enrich_class_map
+  return (Program typecheck_classes)
   
 collectClasses :: (MonadError CompilerError m, Functor m)
                   => Program String
@@ -476,7 +477,20 @@ typecheckExpr (Cond pred the els) = do
     where
       condType t_typ Nothing           = return t_typ
       condType t_typ (Just (_, e_typ)) = lesserUpperBound t_typ e_typ
-typecheckExpr (Dispatch meth cast target params) = error "todo"
+typecheckExpr (Dispatch meth cast target params) = do
+  (target', t_typ) <- typecheckExpr target
+  traverse (validCast t_typ) cast
+  class_map <- asks tcClassMap
+  let clazz = unsafeLookup_u (getUnique (maybe t_typ id cast)) class_map
+  (r_typ, p_typs) <- local (\e -> e{tcCurrentClass=clazz}) (methodEnv meth)
+  params' <- traverse (typecheckParam meth) (zip3 params p_typs [1..])
+  return (Dispatch meth cast target' params', r_typ)
+    where
+      validCast t_typ cast = do
+        parent  <- t_typ `ancestorOf` cast
+        child   <- cast  `ancestorOf` t_typ
+        let related = parent || child
+        when (not related) (throwError $ TypeError $ "Cannot cast " ++ t_typ ++ " to " ++ cast)
 typecheckExpr (Divide l r) = do
   (l', l_typ) <- typecheckExpr l
   (r', r_typ) <- typecheckExpr r
@@ -554,14 +568,8 @@ typecheckExpr (Plus l r) = do
   return (Plus l' r', "Int")
 typecheckExpr (StaticDispatch (Scoped name scope) params) = do
   (ret_typ, par_typs) <- methodEnv name
-  params'             <- traverse (typecheckParams name) (zip3 params par_typs [1..])
+  params'             <- traverse (typecheckParam name) (zip3 params par_typs [1..])
   return (StaticDispatch (Scoped (name, ret_typ) scope) params', ret_typ)
-      where
-        typecheckParams name (expr, typ, pos) = do
-          (expr', e_typ) <- typecheckExpr expr
-          related        <- typ `ancestorOf` e_typ
-          when (not related) (throwError $ TypeError $ "Invalid type for paramenter " ++ (show pos) ++ " of " ++ name ++ " method , should be " ++ typ ++ " instead of " ++ e_typ)
-          return expr'
 typecheckExpr (StringConst s) = return (StringConst s, "String")
 typecheckExpr (Sub l r) = do
   (l', l_typ) <- typecheckExpr l
@@ -593,9 +601,19 @@ typecheckExpr (Case scrutinee (x:decls)) = do
         put r_type
         return triple'
 
-namer :: Alex (Program (Scoped String))
-namer = go =<< parser
+typecheckParam :: (MonadError CompilerError m, MonadReader TypecheckEnv m, Applicative m)
+                  => String
+                  -> (Expr (Scoped String), Type, Int)
+                  -> m (Expr (Scoped (String, Type)))
+typecheckParam name (expr, typ, pos) = do
+  (expr', e_typ) <- typecheckExpr expr
+  related        <- typ `ancestorOf` e_typ
+  when (not related) (throwError $ TypeError $ "Invalid type for paramenter " ++ (show pos) ++ " of " ++ name ++ " method , should be " ++ typ ++ " instead of " ++ e_typ)
+  return expr'
+          
+typecheck :: Alex (Program (Scoped (String, Type)))
+typecheck = go =<< parser
   where
-    go program = case collectProgramObjects program of
+    go program = case typecheckProgram program of
       Left e  -> alexError (show e)
       Right a -> return a
