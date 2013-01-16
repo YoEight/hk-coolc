@@ -455,7 +455,15 @@ typecheckExpr (Assign (Scoped name scope) expr) = do
   related        <- typ `ancestorOf` e_typ
   when (not related) (throwError $ TypeError $ name ++ ":" ++ typ ++ " can't be assigned to an expression of type " ++ e_typ)
   return (Assign (Scoped (name, typ) scope) expr', typ)
-typecheckExpr (Block exprs) = error "todo"   --fmap Block (traverse typecheckExpr exprs)
+typecheckExpr (Block (e:exprs)) = do
+  (e', e_typ) <- typecheckExpr e
+  (exprs', r_typ) <- runStateT (traverse typecheckBlock exprs) e_typ
+  return (Block (e':exprs'), r_typ)
+    where
+      typecheckBlock expr = do
+        (expr', e_typ) <- typecheckExpr expr
+        put e_typ
+        return expr'
 typecheckExpr (BoolConst b) = return (BoolConst b, "Bool")
 typecheckExpr (Comp expr) = fmap (\(expr', typ) -> (Comp expr', typ)) (typecheckExpr expr)
 typecheckExpr (Cond pred the els) = do
@@ -504,8 +512,8 @@ typecheckExpr (Let decls expr) = do
 typecheckExpr (Loop pred expr) = do
   (pred', p_typ) <- typecheckExpr pred
   when (p_typ /= "Bool") (throwError $ TypeError $ "Predicate expression must be of type Bool not " ++ p_typ)
-  (expr', e_typ) <- typecheckExpr expr
-  return (Loop pred' expr', e_typ)
+  (expr', _) <- typecheckExpr expr
+  return (Loop pred' expr', "Object")
 typecheckExpr (Lt l r) = do
   (l', l_typ) <- typecheckExpr l
   (r', r_typ) <- typecheckExpr r
@@ -565,10 +573,25 @@ typecheckExpr (Not expr) = do
   (expr', typ) <- typecheckExpr expr
   when (typ /= "Bool") (throwError $ TypeError $ "Cannot use boolean opeation on type " ++ typ)
   return (Not expr', "Bool")
-typecheckExpr (Case scrutinee decls) = do
+typecheckExpr (Case scrutinee (x:decls)) = do
   (scrutinee', s_typ) <- typecheckExpr scrutinee
-  error "todo"
---  decls'              <- traverse typecheckDecls decls
+  (x', x_typ)         <- typecheckDecl s_typ x
+  (decls', r_typ)     <- runStateT (traverse (typecheckDecl' s_typ) decls) x_typ
+  return (Case scrutinee' (x':decls'), r_typ)
+    where
+      typecheckDecl s_typ (name, typ, expr) = do
+         parent <- s_typ `ancestorOf` typ
+         child  <- typ `ancestorOf` s_typ
+         let related = parent || child
+         when (not related) (throwError $ TypeError $ "You can't declare a case branch of type" ++ typ ++ "which isn't related to scrutinee type (" ++ s_typ ++ ")")
+         (expr', e_typ) <- typecheckExpr expr
+         return ((name, typ, expr'), e_typ)
+      typecheckDecl' s_typ triple = do
+        (triple', t_typ) <- typecheckDecl s_typ triple 
+        lub <- get
+        r_type <- lesserUpperBound lub t_typ
+        put r_type
+        return triple'
 
 namer :: Alex (Program (Scoped String))
 namer = go =<< parser
