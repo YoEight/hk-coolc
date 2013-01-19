@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleContexts, ScopedTypeVariables #-}
 
-module Semantic where
+module Semantic (module Semantic.Model, typecheck) where
 
 import Semantic.Model
 
@@ -563,9 +563,5 @@ typecheckParam name (expr, typ, pos) = do
   when (not related) (throwError $ TypeError $ "Invalid type for paramenter " ++ (show pos) ++ " of " ++ name ++ " method , should be " ++ typ ++ " instead of " ++ e_typ)
   return expr'
           
-typecheck :: Alex (Program (Scoped (String, Type)))
-typecheck = go =<< parser
-  where
-    go program = case typecheckProgram program of
-      Left e  -> alexError (show e)
-      Right a -> return a
+typecheck :: Program String -> Alex (Program (Scoped (String, Type)))
+typecheck = either (alexError . show) return . typecheckProgram

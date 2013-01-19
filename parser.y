@@ -1,8 +1,7 @@
 {
 module Parser (parser
-              ,lexerP
               ,alexError
-              ,execute
+	      ,execute	      
               ,Alex(..)) where
 
 import Prelude hiding (Ordering(..))

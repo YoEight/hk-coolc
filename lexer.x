@@ -1,5 +1,11 @@
 {
-module Lexer where
+module Lexer (lexer
+       	     ,getPosn
+	     ,alexError
+	     ,execute	     
+	     ,failAlex 
+       	     ,Token(..)
+	     ,Alex(..)) where
 
 import Prelude hiding (Ordering(..))
 import Control.Monad
@@ -139,8 +145,6 @@ alexInitUserState = AlexUserState 0 "" (-1, -1)
 
 type Line   = Int
 type Column = Int
-
---data Lexeme = Lexeme Line Column Token deriving Show
 
 get = Alex $ \s   -> Right (s, alex_ust s)
 put u = Alex $ \s -> Right (s{alex_ust=u}, ())
