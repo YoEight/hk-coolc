@@ -128,7 +128,7 @@ typecheckProgram :: (MonadError CompilerError m, Applicative m)
 typecheckProgram program = do
   class_map <- collectClasses program
   let class_map' = unionUFM_u sysClassMap class_map
-  classes   <- runReaderT (traverse collectClassObjects (programClasses program)) class_map'
+  classes   <- runReaderT (traverse collectClassObjects (programClasses program ++ elemsUFM sysClassMap)) class_map'
   let enrich_class_map = listToUFM $ fmap (\c -> (className c, c)) classes
   typecheck_classes <- runReaderT (traverse typecheckClass classes) enrich_class_map
   return (Program typecheck_classes)
@@ -487,7 +487,7 @@ typecheckExpr (Dispatch meth cast target params) = do
   (target', t_typ) <- typecheckExpr target
   traverse (validCast t_typ) cast
   class_map <- asks tcClassMap
-  let clazz = unsafeLookup_u (getUnique (maybe t_typ id cast)) class_map -- had to deal with system classes cast. ex: self@Object.copy() doesn't work whereas self.copy() does
+  let clazz = unsafeLookup_u (getUnique (maybe t_typ id cast)) class_map
   (r_typ, p_typs) <- local (\e -> e{tcCurrentClass=clazz}) (methodEnv meth)
   params' <- traverse (typecheckParam meth) (zip3 params p_typs [1..])
   return (Dispatch meth cast target' params', r_typ)
