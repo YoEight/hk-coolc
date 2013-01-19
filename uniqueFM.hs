@@ -4,11 +4,13 @@ module UniqueFM where
 
 import Data.Monoid
 import Data.Maybe
+import Data.Traversable
+import Data.Foldable hiding (foldl)
 import qualified Data.IntMap as I
 
 import Unique
 
-newtype UniqueFM a = UFM { unUFM :: I.IntMap a } deriving (Show, Functor, Monoid)
+newtype UniqueFM a = UFM { unUFM :: I.IntMap a } deriving (Show, Functor, Monoid, Foldable, Traversable)
 
 emptyUFM :: UniqueFM a
 emptyUFM = UFM I.empty
@@ -54,3 +56,6 @@ updateUFM_u f k (UFM m) = UFM $ I.update f (getKey k) m
 
 elemsUFM :: UniqueFM a -> [a]
 elemsUFM (UFM m) = I.elems m
+
+filterUFM :: (a -> Bool) -> UniqueFM a -> UniqueFM a
+filterUFM f (UFM m) = UFM $ I.filter f m 

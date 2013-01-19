@@ -87,24 +87,24 @@ intUnique = getUnique "Int"
 boolUnique = getUnique "Bool"
 
 objectClass =
-  let meths = [ Method "abort" "Object" [] NoExpr
-              , Method "type_name" "String" [] NoExpr
-              , Method "copy" "SELF_TYPE" [] NoExpr]
+  let meths = [ Method "abort" "Object" [] (IntConst 1)
+              , Method "type_name" "String" [] (StringConst "")
+              , Method "copy" "SELF_TYPE" [] (Object "self")]
   in Class "Object" "Object" [] meths
 
 ioClass =
-  let meths = [ Method "out_string" "SELF_TYPE" [Formal "x" "String"] NoExpr
-              , Method "out_int" "SELF_TYPE" [Formal "x" "Int"] NoExpr
-              , Method "in_string" "String" [] NoExpr
-              , Method "in_int" "Int" [] NoExpr]
+  let meths = [ Method "out_string" "SELF_TYPE" [Formal "x" "String"] (Object "self")
+              , Method "out_int" "SELF_TYPE" [Formal "x" "Int"] (Object "self")
+              , Method "in_string" "String" [] (StringConst "")
+              , Method "in_int" "Int" [] (IntConst 1)]
   in Class "IO" "Object" [] meths
 
 intClass = Class "Int" "Object" [] []
 
 stringClass =
-  let meths = [ Method "length" "Int" [] NoExpr
-              , Method "concat" "String" [Formal "s" "String"] NoExpr
-              , Method "substr" "String" [Formal "i" "Int", Formal "l" "Int"] NoExpr]
+  let meths = [ Method "length" "Int" [] (IntConst 1)
+              , Method "concat" "String" [Formal "s" "String"] (StringConst "")
+              , Method "substr" "String" [Formal "i" "Int", Formal "l" "Int"] (StringConst "")]
   in Class "String" "Object" [] meths
 
 boolClass = Class "Bool" "Object" [] []
@@ -371,7 +371,7 @@ ancestorOf typ cand
     where 
       go typ cand = do
         class_map <- asks tcClassMap
-        let (Just parent) = fmap classParent (lookupUFM cand class_map)
+        let parent = maybe "Object" id (fmap classParent (lookupUFM cand class_map))
         case typ == parent of
           False -> if parent == "Object"
                    then return False
@@ -383,11 +383,14 @@ objectEnv :: MonadReader TypecheckEnv m
              -> ObjectMap String 
              -> m Type
 objectEnv name scope = do
-  (Class name _ _ _) <- asks tcCurrentClass
-  let (Obj _ typ _) = unsafeLookup_u (getUnique name) scope
-  case typ of
-    "SELF_TYPE" -> return name
-    _           -> return typ
+  class_name <- asks (className . tcCurrentClass)
+  case name of
+    "self" -> return class_name
+    _      -> do
+      let (Obj _ typ _) = unsafeLookup_u (getUnique name) scope
+      case typ of
+        "SELF_TYPE" -> return class_name
+        _           -> return typ
 
 methodEnv :: MonadReader TypecheckEnv m
              => String
@@ -415,8 +418,8 @@ lesserUpperBound a b
     (_, True) -> return b
     _         -> do
       class_map <- asks tcClassMap
-      let (Class _ a_parent _ _) = unsafeLookup_u (getUnique a) class_map
-          (Class _ b_parent _ _) = unsafeLookup_u (getUnique b) class_map
+      let a_parent = maybe "Object" classParent (lookupUFM a class_map)
+          b_parent = maybe "Object" classParent (lookupUFM b class_map)
       lesserUpperBound a_parent b_parent
 
 typecheckClass :: (MonadError CompilerError m, MonadReader (ClassMap (Scoped String)) m, Applicative m)
@@ -443,8 +446,11 @@ typecheckMethod :: (MonadError CompilerError m, MonadReader TypecheckEnv m, Appl
                    => Method (Scoped String)
                    -> m (Method (Scoped (String, Type)))
 typecheckMethod (Method name typ formals payload) = do
+  class_name <- asks (className . tcCurrentClass)
   (payload', p_typ) <- typecheckExpr payload
-  when (typ /= p_typ) (throwError $ TypeError $ name ++ " method type is different from its body expression: " ++ p_typ)
+  let typ' = if "SELF_TYPE" == typ then class_name else typ
+  related <- typ' `ancestorOf` p_typ
+  when (not related) (throwError $ TypeError $ name ++ " method type (" ++ typ'  ++ ") is different from its body expression: " ++ p_typ)
   return (Method name typ formals payload')
 
 typecheckExpr :: (MonadError CompilerError m, MonadReader TypecheckEnv m, Applicative m)
@@ -481,7 +487,7 @@ typecheckExpr (Dispatch meth cast target params) = do
   (target', t_typ) <- typecheckExpr target
   traverse (validCast t_typ) cast
   class_map <- asks tcClassMap
-  let clazz = unsafeLookup_u (getUnique (maybe t_typ id cast)) class_map
+  let clazz = unsafeLookup_u (getUnique (maybe t_typ id cast)) class_map -- had to deal with system classes cast. ex: self@Object.copy() doesn't work whereas self.copy() does
   (r_typ, p_typs) <- local (\e -> e{tcCurrentClass=clazz}) (methodEnv meth)
   params' <- traverse (typecheckParam meth) (zip3 params p_typs [1..])
   return (Dispatch meth cast target' params', r_typ)
