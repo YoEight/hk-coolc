@@ -24,7 +24,6 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.Error.Class
 import Control.Monad.RWS
-import System.IO.Unsafe
 import Unique
 import UniqueFM
 
