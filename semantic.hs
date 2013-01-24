@@ -1,28 +1,32 @@
-{-# LANGUAGE FlexibleContexts, ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE UnicodeSyntax         #-}
 
 module Semantic (module Semantic.Model, typecheck) where
 
 import Semantic.Model
 
-import Prelude hiding (foldr, foldl, (.), id)
+import Prelude                    hiding (foldl, foldr, id, (.))
 
-import Control.Category
 import Control.Arrow
-import Control.Monad.Trans.State hiding (put, get, modify)
+import Control.Category
 import Control.Monad.Trans.Reader hiding (ask, asks, local)
+import Control.Monad.Trans.State  hiding (get, modify, put)
 
 import Data.Either
-import Data.Maybe
 import Data.Foldable
+import Data.Maybe
 import Data.Traversable
 import Parser
 
-import Unique
-import UniqueFM
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Error.Class
 import Control.Monad.RWS
+import System.IO.Unsafe
+import Unique
+import UniqueFM
 
 objectUnique = getUnique "Object"
 ioUnique = getUnique "IO"
@@ -66,20 +70,20 @@ sysClassMap = listToUFM [("Object", objectClass)
                         ,("String", stringClass)
                         ,("Bool", boolClass)]
 
-typecheckProgram :: (MonadError CompilerError m, Applicative m)
-                    => Program String
-                    -> m (Program (Scoped (String, Type)))
+typecheckProgram ∷ (MonadError CompilerError m, Applicative m)
+                    ⇒ Program String
+                    → m (Program (Scoped (String, Type)))
 typecheckProgram program = do
   class_map <- collectClasses program
   let class_map' = unionUFM_u sysClassMap class_map
   classes   <- runReaderT (traverse collectClassObjects (programClasses program ++ elemsUFM sysClassMap)) class_map'
-  let enrich_class_map = listToUFM $ fmap (\c -> (className c, c)) classes
+  let enrich_class_map = listToUFM $ fmap (\(c, _) -> (className c, c)) classes
   typecheck_classes <- runReaderT (traverse typecheckClass classes) enrich_class_map
   return (Program typecheck_classes)
-  
-collectClasses :: (MonadError CompilerError m, Functor m)
-                  => Program String
-                  -> m (ClassMap String)
+
+collectClasses ∷ (MonadError CompilerError m, Functor m)
+                  ⇒ Program String
+                  → m (ClassMap String)
 collectClasses = flip execStateT emptyUFM . traverse_ go . programClasses
   where
     go c@(Class name _ _ _) = do
@@ -87,9 +91,9 @@ collectClasses = flip execStateT emptyUFM . traverse_ go . programClasses
       when (memberUFM name class_map) (throwError $ ClassDuplicate name)
       put (insertUFM name c class_map)
 
-enrichClass :: (MonadError CompilerError m, MonadReader (ClassMap String) m)
-               => Class String
-               -> m (AttrMap String, MethodMap String)
+enrichClass ∷ (MonadError CompilerError m, MonadReader (ClassMap String) m)
+               ⇒ Class String
+               → m (AttrMap String, MethodMap String)
 enrichClass clazz = do
   let init_state = (emptyUFM, emptyUFM)
       operation unique (attrs, meths) = populateFeatureTable attrs meths unique
@@ -97,30 +101,30 @@ enrichClass clazz = do
   graph                <- validateClassGraph clazz
   (attr_map, meth_map) <- foldrM operation init_state ((getUnique name):graph)
   return (attr_map, meth_map)
-  
-illegalInheritance :: String -> Bool
+
+illegalInheritance ∷ String → Bool
 illegalInheritance "String" = True
 illegalInheritance "Int"    = True
 illegalInheritance "Bool"   = True
 illegalInheritance _        = False
 
-checkTypeDecl :: (MonadError CompilerError m, MonadReader ScopedEnv m)
-                 => String
-                 -> m ()
+checkTypeDecl ∷ (MonadError CompilerError m, MonadReader ScopedEnv m)
+                 ⇒ String
+                 → m ()
 checkTypeDecl "SELF_TYPE" = return ()
 checkTypeDecl typ = do
   class_map <- asks spClassMap
   when (not (memberUFM typ class_map)) (throwError $ UnknownClass typ)
 
-checkIdDecl :: MonadError CompilerError m
-               => String
-               -> m ()
+checkIdDecl ∷ MonadError CompilerError m
+               ⇒ String
+               → m ()
 checkIdDecl "self" = throwError InvalidIdDeclaration
-checkIdDecl _ = return () 
+checkIdDecl _ = return ()
 
-validateClassGraph :: (MonadError CompilerError m, MonadReader (ClassMap String) m)
-                      => Class String
-                      -> m [Unique]
+validateClassGraph ∷ (MonadError CompilerError m, MonadReader (ClassMap String) m)
+                      ⇒ Class String
+                      → m [Unique]
 validateClassGraph = go emptyUFM
   where go passed_map (Class _ parent _ _)
           | memberUFM parent passed_map = throwError (CyclicInheritanceGraph parent)
@@ -134,12 +138,12 @@ validateClassGraph = go emptyUFM
               Just clazz -> do
                 let passed_map' = insertUFM parent () passed_map
                 liftM ((getUnique parent):) (go passed_map' clazz)
-    
-populateFeatureTable :: (MonadReader (ClassMap String) m, MonadError CompilerError m)
-                        => AttrMap String
-                        -> MethodMap String
-                        -> Unique
-                        -> m (AttrMap String, MethodMap String)
+
+populateFeatureTable ∷ (MonadReader (ClassMap String) m, MonadError CompilerError m)
+                        ⇒ AttrMap String
+                        → MethodMap String
+                        → Unique
+                        → m (AttrMap String, MethodMap String)
 populateFeatureTable attrMap methMap unique = do
   (Class name _ attrs meths)    <- asks (unsafeLookup_u unique)
   attrMap' <- foldrM (populateOverloadedFeature name onAttr) attrMap attrs
@@ -149,12 +153,12 @@ populateFeatureTable attrMap methMap unique = do
       onAttr (Attr name typ _)       = (name, typ)
       onMethod (Method name typ _ _) = (name, typ)
 
-populateOverloadedFeature :: MonadError CompilerError m
-                             => ClassName
-                             -> (f String -> (String, String))
-                             -> f String
-                             -> UniqueFM (f String, ClassName)
-                             -> m (UniqueFM (f String, ClassName))
+populateOverloadedFeature ∷ MonadError CompilerError m
+                             ⇒ ClassName
+                             → (f String → (String, String))
+                             → f String
+                             → UniqueFM (f String, ClassName)
+                             → m (UniqueFM (f String, ClassName))
 populateOverloadedFeature cls_name f feature m = do
   let (name, typ) = f feature
   case lookupUFM name m of
@@ -165,23 +169,23 @@ populateOverloadedFeature cls_name f feature m = do
         then return $ updateUFM (const $ Just (feature, cls_name)) name  m
         else throwError (InvalidFeatureType name typ elder_typ)
 
-collectClassObjects :: (MonadReader (ClassMap String) m, MonadError CompilerError m, Applicative m)
-                       => Class String
-                       -> m (Class (Scoped String))
+collectClassObjects ∷ (MonadReader (ClassMap String) m, MonadError CompilerError m, Applicative m)
+                       ⇒ Class String
+                       → m (Class (Scoped String), MethodMap String)
 collectClassObjects clazz = do
   validateClassFeatures clazz
   (attr_map, meth_map) <- enrichClass clazz
   class_map <- ask
   let toObj ((Attr name typ p), _) = Obj name typ p
       (Class name parent attrs meths) = clazz
-      init_sp_env = SPEnv clazz class_map meth_map (fmap toObj attr_map)
+      init_sp_env = SPEnv clazz class_map meth_map (fmap toObj (attr_map))
   attrs'    <- runReaderT (traverse collectAttrObjects attrs) init_sp_env
   meths'    <- runReaderT (traverse collectMethodObjects meths) init_sp_env
-  return (Class name parent attrs' meths')
+  return (Class name parent attrs' meths', meth_map)
 
-validateClassFeatures :: MonadError CompilerError m
-                         => Class String
-                         -> m ()
+validateClassFeatures ∷ MonadError CompilerError m
+                         ⇒ Class String
+                         → m ()
 validateClassFeatures (Class _ _ attrs meths) = do
   foldrM onAttr emptyUFM attrs
   foldrM onMeth emptyUFM meths
@@ -196,17 +200,17 @@ validateClassFeatures (Class _ _ attrs meths) = do
         when (memberUFM name env) (throwError $ DuplicateMethodDeclaration name)
         return (insertUFM name () env)
 
-collectAttrObjects :: (MonadError CompilerError m, MonadReader ScopedEnv m, Applicative m)
-                      => Attr String
-                      -> m (Attr (Scoped String))
+collectAttrObjects ∷ (MonadError CompilerError m, MonadReader ScopedEnv m, Applicative m)
+                      ⇒ Attr String
+                      → m (Attr (Scoped String))
 collectAttrObjects (Attr n t payload) = do
   checkTypeDecl t
   payload' <- traverse collectExprObjects payload
   return (Attr n t payload')
 
-collectMethodObjects :: (MonadError CompilerError m, MonadReader ScopedEnv m, Applicative m)
-                        => Method String
-                        -> m (Method (Scoped String))
+collectMethodObjects ∷ (MonadError CompilerError m, MonadReader ScopedEnv m, Applicative m)
+                        ⇒ Method String
+                        → m (Method (Scoped String))
 collectMethodObjects (Method name typ formals body) = do
   checkTypeDecl typ
   object_map   <- asks spObjMap
@@ -222,9 +226,9 @@ collectMethodObjects (Method name typ formals body) = do
         when (memberUFM name object_map) (throwError $ DuplicateVarDeclaration name)
         return (insertUFM name (Obj name typ Nothing) object_map)
 
-collectExprObjects :: (MonadError CompilerError m, MonadReader ScopedEnv m, Applicative m)
-                      => Expr String
-                      -> m (Expr (Scoped String))
+collectExprObjects ∷ (MonadError CompilerError m, MonadReader ScopedEnv m, Applicative m)
+                      ⇒ Expr String
+                      → m (Expr (Scoped String))
 collectExprObjects expr =
   case expr of
     Assign name expr -> do
@@ -249,7 +253,7 @@ collectExprObjects expr =
     Isvoid expr -> fmap Isvoid (collectExprObjects expr)
     Let vars body -> do
       env                     <- ask
-      (vars', object_map', (_ :: ())) <- runRWST (traverse go vars) env emptyUFM 
+      (vars', object_map', (_ :: ())) <- runRWST (traverse go vars) env emptyUFM
       body'                   <- local (\e -> e{spObjMap=object_map'}) (collectExprObjects body)
       return (Let vars' body')
         where
@@ -306,14 +310,14 @@ collectExprObjects expr =
             expr'      <- local (\e -> e{spObjMap = insertUFM name (Obj name typ (Just expr)) object_map}) (collectExprObjects expr)
             return (name, typ, expr')
 
-ancestorOf :: MonadReader TypecheckEnv m
-            => Type
-            -> Type
-            -> m Bool
-ancestorOf typ cand 
+ancestorOf ∷ MonadReader TypecheckEnv m
+            ⇒ Type
+            → Type
+            → m Bool
+ancestorOf typ cand
     | typ == cand = return True
     | otherwise = go typ cand
-    where 
+    where
       go typ cand = do
         class_map <- asks tcClassMap
         let parent = maybe "Object" id (fmap classParent (lookupUFM cand class_map))
@@ -323,10 +327,10 @@ ancestorOf typ cand
                    else ancestorOf typ parent
           True  -> return True
 
-objectEnv :: MonadReader TypecheckEnv m
-             => String 
-             -> ObjectMap String 
-             -> m Type
+objectEnv ∷ MonadReader TypecheckEnv m
+             ⇒ String
+             → ObjectMap String
+             → m Type
 objectEnv name scope = do
   class_name <- asks (className . tcCurrentClass)
   case name of
@@ -337,24 +341,19 @@ objectEnv name scope = do
         "SELF_TYPE" -> return class_name
         _           -> return typ
 
-methodEnv :: (MonadReader TypecheckEnv m, MonadError CompilerError m)
-             => String
-             -> m (Type, [Type])
+methodEnv ∷ (MonadReader TypecheckEnv m, MonadError CompilerError m)
+             ⇒ String
+             → m (Type, [Type])
 methodEnv name = do
-  (cls, meths) <- asks ((className &&& classMethods) . tcCurrentClass)
-  (Method _ typ formals _) <- lookupMethod cls name meths
-  let typ' = if typ == "SELF_TYPE" then cls else typ 
+  (cls, meths) <- asks ((className . tcCurrentClass) &&& tcMethodMap)
+  let ((Method _ typ formals _), _) = unsafeLookup_u (getUnique name) meths
+      typ' = if typ == "SELF_TYPE" then cls else typ
   return (typ', fmap formalType formals)
-    where
-      lookupMethod cls name [] = throwError $ UnknownMethod name cls
-      lookupMethod cls name (m:ms)
-          | name == methodName m = return m
-          | otherwise            = lookupMethod cls name ms
 
-lesserUpperBound :: MonadReader TypecheckEnv m
-                    => Type
-                    -> Type
-                    -> m Type
+lesserUpperBound ∷ MonadReader TypecheckEnv m
+                    ⇒ Type
+                    → Type
+                    → m Type
 lesserUpperBound a b
     | a == b = return a
     | otherwise = do
@@ -369,18 +368,18 @@ lesserUpperBound a b
           b_parent = maybe "Object" classParent (lookupUFM b class_map)
       lesserUpperBound a_parent b_parent
 
-typecheckClass :: (MonadError CompilerError m, MonadReader (ClassMap (Scoped String)) m, Applicative m)
-                  => Class (Scoped String)
-                  -> m (Class (Scoped (String, Type)))
-typecheckClass c@(Class name parent attrs meths) = do
+typecheckClass ∷ (MonadError CompilerError m, MonadReader (ClassMap (Scoped String)) m, Applicative m)
+                  ⇒ (Class (Scoped String), MethodMap String)
+                  → m (Class (Scoped (String, Type)))
+typecheckClass (c@(Class name parent attrs meths), meth_map) = do
   class_map <- ask
-  attrs'    <- runReaderT (traverse typecheckAttr attrs) (TCEnv c class_map)
-  meths'    <- runReaderT (traverse typecheckMethod meths) (TCEnv c class_map)
+  attrs'    <- runReaderT (traverse typecheckAttr attrs) (TCEnv c class_map meth_map)
+  meths'    <- runReaderT (traverse typecheckMethod meths) (TCEnv c class_map meth_map)
   return (Class name parent attrs' meths')
 
-typecheckAttr :: (MonadError CompilerError m, MonadReader TypecheckEnv m, Applicative m)
-                 => Attr (Scoped String)
-                 -> m (Attr (Scoped (String, Type)))
+typecheckAttr ∷ (MonadError CompilerError m, MonadReader TypecheckEnv m, Applicative m)
+                 ⇒ Attr (Scoped String)
+                 → m (Attr (Scoped (String, Type)))
 typecheckAttr (Attr name typ e) =
     case e of
       Nothing   -> return (Attr name typ Nothing)
@@ -389,9 +388,9 @@ typecheckAttr (Attr name typ e) =
              when (typ /= e_typ) (throwError $ TypeError $ name ++ " attribute type is different from its init expression: " ++ e_typ)
              return (Attr name typ (Just expr'))
 
-typecheckMethod :: (MonadError CompilerError m, MonadReader TypecheckEnv m, Applicative m)
-                   => Method (Scoped String)
-                   -> m (Method (Scoped (String, Type)))
+typecheckMethod ∷ (MonadError CompilerError m, MonadReader TypecheckEnv m, Applicative m)
+                   ⇒ Method (Scoped String)
+                   → m (Method (Scoped (String, Type)))
 typecheckMethod (Method name typ formals payload) = do
   class_name <- asks (className . tcCurrentClass)
   (payload', p_typ) <- typecheckExpr payload
@@ -400,9 +399,9 @@ typecheckMethod (Method name typ formals payload) = do
   when (not related) (throwError $ TypeError $ name ++ " method type (" ++ typ'  ++ ") is different from its body expression: " ++ p_typ)
   return (Method name typ formals payload')
 
-typecheckExpr :: (MonadError CompilerError m, MonadReader TypecheckEnv m, Applicative m)
-                 => Expr (Scoped String)
-                 -> m (Expr (Scoped (String, Type)), Type)
+typecheckExpr ∷ (MonadError CompilerError m, MonadReader TypecheckEnv m, Applicative m)
+                 ⇒ Expr (Scoped String)
+                 → m (Expr (Scoped (String, Type)), Type)
 typecheckExpr (Assign (Scoped name scope) expr) = do
   typ <- objectEnv name scope
   (expr', e_typ) <- typecheckExpr expr
@@ -449,7 +448,7 @@ typecheckExpr (Divide l r) = do
   (r', r_typ) <- typecheckExpr r
   when (l_typ /= "Int" || r_typ /= "Int") (throwError $ TypeError $ "Cannot divide " ++ l_typ ++ " by " ++ r_typ)
   return (Divide l' r', "Int")
-typecheckExpr (Eq l r) = do  
+typecheckExpr (Eq l r) = do
   (l', l_typ) <- typecheckExpr l
   (r', r_typ) <- typecheckExpr r
   when (l_typ /= "Int" || r_typ /= "Int") (throwError $ TypeError $ "Cannot do equal operation on " ++ l_typ ++ " and " ++ r_typ)
@@ -548,21 +547,21 @@ typecheckExpr (Case scrutinee (x:decls)) = do
          (expr', e_typ) <- typecheckExpr expr
          return ((name, typ, expr'), e_typ)
       typecheckDecl' s_typ triple = do
-        (triple', t_typ) <- typecheckDecl s_typ triple 
+        (triple', t_typ) <- typecheckDecl s_typ triple
         lub <- get
         r_type <- lesserUpperBound lub t_typ
         put r_type
         return triple'
 
-typecheckParam :: (MonadError CompilerError m, MonadReader TypecheckEnv m, Applicative m)
-                  => String
-                  -> (Expr (Scoped String), Type, Int)
-                  -> m (Expr (Scoped (String, Type)))
+typecheckParam ∷ (MonadError CompilerError m, MonadReader TypecheckEnv m, Applicative m)
+                  ⇒ String
+                  → (Expr (Scoped String), Type, Int)
+                  → m (Expr (Scoped (String, Type)))
 typecheckParam name (expr, typ, pos) = do
   (expr', e_typ) <- typecheckExpr expr
   related        <- typ `ancestorOf` e_typ
   when (not related) (throwError $ TypeError $ "Invalid type for paramenter " ++ (show pos) ++ " of " ++ name ++ " method , should be " ++ typ ++ " instead of " ++ e_typ)
   return expr'
-          
-typecheck :: Program String -> Alex (Program (Scoped (String, Type)))
+
+typecheck ∷ Program String → Alex (Program (Scoped (String, Type)))
 typecheck = either (alexError . show) return . typecheckProgram

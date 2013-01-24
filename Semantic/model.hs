@@ -58,7 +58,8 @@ data ScopedEnv = SPEnv { spCurrentClass :: Class String
                        , spObjMap       :: ObjectMap String}
 
 data TypecheckEnv = TCEnv { tcCurrentClass :: Class (Scoped String)
-                          , tcClassMap :: ClassMap (Scoped String) }
+                          , tcClassMap :: ClassMap (Scoped String)
+                          , tcMethodMap :: MethodMap String }
 
 instance Show CompilerError where
   show (ClassDuplicate name) = "Class " ++ name ++ " already exists"
