@@ -89,14 +89,14 @@ collectClasses = flip execStateT emptyUFM . traverse_ go . programClasses
 
 enrichClass :: (MonadError CompilerError m, MonadReader (ClassMap String) m)
                => Class String
-               -> m (Class String, AttrMap String, MethodMap String)
+               -> m (AttrMap String, MethodMap String)
 enrichClass clazz = do
   let init_state = (emptyUFM, emptyUFM)
       operation unique (attrs, meths) = populateFeatureTable attrs meths unique
       (Class name parent attrs meths) = clazz
   graph                <- validateClassGraph clazz
   (attr_map, meth_map) <- foldrM operation init_state ((getUnique name):graph)
-  return (Class name parent (elemsUFM attr_map) (elemsUFM meth_map), attr_map, meth_map)
+  return (attr_map, meth_map)
   
 illegalInheritance :: String -> Bool
 illegalInheritance "String" = True
@@ -141,27 +141,28 @@ populateFeatureTable :: (MonadReader (ClassMap String) m, MonadError CompilerErr
                         -> Unique
                         -> m (AttrMap String, MethodMap String)
 populateFeatureTable attrMap methMap unique = do
-  clazz    <- asks (unsafeLookup_u unique)
-  attrMap' <- foldrM (populateOverloadedFeature onAttr) attrMap (classAttrs clazz)
-  methMap' <- foldrM (populateOverloadedFeature onMethod) methMap (classMethods clazz)
+  (Class name _ attrs meths)    <- asks (unsafeLookup_u unique)
+  attrMap' <- foldrM (populateOverloadedFeature name onAttr) attrMap attrs
+  methMap' <- foldrM (populateOverloadedFeature name onMethod) methMap meths
   return (attrMap', methMap')
     where
       onAttr (Attr name typ _)       = (name, typ)
       onMethod (Method name typ _ _) = (name, typ)
 
 populateOverloadedFeature :: MonadError CompilerError m
-                             => (f String -> (String, String))
+                             => ClassName
+                             -> (f String -> (String, String))
                              -> f String
-                             -> UniqueFM (f String)
-                             -> m (UniqueFM (f String))
-populateOverloadedFeature f feature m = do
+                             -> UniqueFM (f String, ClassName)
+                             -> m (UniqueFM (f String, ClassName))
+populateOverloadedFeature cls_name f feature m = do
   let (name, typ) = f feature
   case lookupUFM name m of
-    Nothing    -> return $ insertUFM name feature m
-    Just elder -> do
+    Nothing    -> return $ insertUFM name (feature, cls_name) m
+    Just (elder, _) -> do
       let (_, elder_typ) = f elder
       if typ == elder_typ
-        then return $ updateUFM (const $ Just feature) name  m
+        then return $ updateUFM (const $ Just (feature, cls_name)) name  m
         else throwError (InvalidFeatureType name typ elder_typ)
 
 collectClassObjects :: (MonadReader (ClassMap String) m, MonadError CompilerError m, Applicative m)
@@ -169,11 +170,11 @@ collectClassObjects :: (MonadReader (ClassMap String) m, MonadError CompilerErro
                        -> m (Class (Scoped String))
 collectClassObjects clazz = do
   validateClassFeatures clazz
-  (enrich_class, attr_map, meth_map) <- enrichClass clazz
+  (attr_map, meth_map) <- enrichClass clazz
   class_map <- ask
-  let toObj (Attr name typ p) = Obj name typ p
-      (Class name parent attrs meths) = enrich_class
-      init_sp_env = SPEnv enrich_class class_map meth_map (fmap toObj attr_map)
+  let toObj ((Attr name typ p), _) = Obj name typ p
+      (Class name parent attrs meths) = clazz
+      init_sp_env = SPEnv clazz class_map meth_map (fmap toObj attr_map)
   attrs'    <- runReaderT (traverse collectAttrObjects attrs) init_sp_env
   meths'    <- runReaderT (traverse collectMethodObjects meths) init_sp_env
   return (Class name parent attrs' meths')

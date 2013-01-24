@@ -7,6 +7,7 @@ module Semantic.Model (module AST
                       ,CompilerError(..)
                       ,ScopedEnv(..)
                       ,TypecheckEnv(..)
+                      ,ClassName
                       ,ClassMap
                       ,MethodMap
                       ,AttrMap
@@ -19,9 +20,10 @@ import UniqueFM
 import Control.Monad.Error.Class
 
 type Type = String
+type ClassName = String
 type ClassMap a = UniqueFM (Class a)
-type MethodMap a = UniqueFM (Method a)
-type AttrMap a = UniqueFM (Attr a)
+type MethodMap a = UniqueFM (Method a, ClassName)
+type AttrMap a = UniqueFM (Attr a, ClassName)
 type ObjectMap a = UniqueFM (Object a)
 
 data Name = Name { nameLabel  :: String
