@@ -229,8 +229,8 @@ getPosn = do
   AlexState (AlexPn x l c) _ _ _ _ <- getState
   return (x, l, c)
 
-execute :: Show a => Alex a -> String -> IO ()
-execute action input = either print print (runAlex input action)
+execute :: Show a => Alex a -> String -> IO a
+execute action input = either error return (runAlex input action)
 
 failAlex msg = Alex $ \_ -> Left msg
 

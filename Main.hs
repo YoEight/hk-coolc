@@ -1,8 +1,19 @@
-module Main (compile) where
+{-# LANGUAGE UnicodeSyntax #-}
+module Main ({-compile-}) where
 
+import Emitter
 import Parser
 import Semantic
 
-process = parser >>= typecheck
+import Control.Monad
 
-compile = execute process 
+import Data.Foldable
+import Text.PrettyPrint
+
+process ∷ Alex [(String, Doc)]
+process = parser >>= liftM programEmitter . typecheck
+
+compile = execute process >=> traverse_ go
+  where
+    go (name, doc) = writeFile ("/Users/yoeight/dev/haskell/" ++ name ++ ".java") (render doc)
+

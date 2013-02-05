@@ -45,6 +45,9 @@ memberUFM_u k = isJust . lookupUFM_u k
 unsafeLookup_u :: Unique -> UniqueFM a -> a
 unsafeLookup_u k (UFM m) = m I.! (getKey k)
 
+unsafeLookup :: Uniquable k => k -> UniqueFM a -> a
+unsafeLookup k = unsafeLookup_u (getUnique k)
+
 unionUFM_u :: UniqueFM a -> UniqueFM a -> UniqueFM a
 unionUFM_u (UFM l) (UFM r) = UFM $ I.union l r
 
