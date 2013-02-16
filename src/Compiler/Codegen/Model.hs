@@ -1,5 +1,5 @@
 {-# LANGUAGE UnicodeSyntax #-}
-module Codegen.Model where
+module Compiler.Codegen.Model where
 
 data JExpr = JAtom String
            | JNew String

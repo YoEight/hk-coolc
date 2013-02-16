@@ -1,6 +1,6 @@
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
 
-module Unique where
+module Compiler.Unique where
 
 import Data.Int
 import Data.HashTable

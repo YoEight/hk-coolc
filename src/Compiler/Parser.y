@@ -1,12 +1,12 @@
 {
-module Parser (parser
-              ,alexError
-	      ,execute	      
-              ,Alex(..)) where
+module Compiler.Parser (parser
+			,alexError
+			,execute	      
+			,Alex(..)) where
 
 import Prelude hiding (Ordering(..))
-import Lexer
-import AST
+import Compiler.Lexer
+import Compiler.AST
 
 }
 

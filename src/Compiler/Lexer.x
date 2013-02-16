@@ -1,11 +1,11 @@
 {
-module Lexer (lexer
-       	     ,getPosn
-	     ,alexError
-	     ,execute	     
-	     ,failAlex 
-       	     ,Token(..)
-	     ,Alex(..)) where
+module Compiler.Lexer (lexer
+       	     	      ,getPosn
+	     	      ,alexError
+	     	      ,execute	     
+	     	      ,failAlex 
+       	     	      ,Token(..)
+	     	      ,Alex(..)) where
 
 import Prelude hiding (Ordering(..))
 import Control.Monad

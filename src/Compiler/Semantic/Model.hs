@@ -1,6 +1,6 @@
-module Semantic.Model (module AST
-                      ,module Unique
-                      ,module UniqueFM
+module Compiler.Semantic.Model (module Compiler.AST
+                               ,module Compiler.Unique
+                               ,module Compiler.UniqueFM
                       ,Name(..)
                       ,Object(..)
                       ,Scoped(..)
@@ -14,9 +14,9 @@ module Semantic.Model (module AST
                       ,ObjectMap
                       ,Type) where
 
-import AST
-import Unique
-import UniqueFM
+import Compiler.AST
+import Compiler.Unique
+import Compiler.UniqueFM
 import Control.Monad.Error.Class
 
 type Type = String

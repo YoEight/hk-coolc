@@ -1,4 +1,4 @@
-module AST where
+module Compiler.AST where
 
 data Program name = Program { programClasses :: [Class name] } deriving Show
 

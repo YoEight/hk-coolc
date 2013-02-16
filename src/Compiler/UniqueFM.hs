@@ -1,6 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-module UniqueFM where
+module Compiler.UniqueFM where
 
 import Data.Monoid
 import Data.Maybe
@@ -8,7 +8,7 @@ import Data.Traversable
 import Data.Foldable hiding (foldl)
 import qualified Data.IntMap as I
 
-import Unique
+import Compiler.Unique
 
 newtype UniqueFM a = UFM { unUFM :: I.IntMap a } deriving (Show, Functor, Monoid, Foldable, Traversable)
 

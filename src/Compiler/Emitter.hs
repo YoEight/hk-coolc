@@ -1,9 +1,9 @@
 {-# LANGUAGE UnicodeSyntax #-}
-module Emitter where
+module Compiler.Emitter where
 
-import AST
+import Compiler.AST
 
-import Codegen.Model
+import Compiler.Codegen.Model
 import Control.Arrow       hiding ((<+>))
 import Control.Monad.State
 
@@ -12,7 +12,7 @@ import Data.List
 import Data.Maybe
 import Data.Traversable
 
-import Semantic.Model
+import Compiler.Semantic.Model
 import Text.PrettyPrint
 
 programEmitter ∷ Program (Scoped (String, Type)) → [(String, Doc)]

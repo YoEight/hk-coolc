@@ -3,9 +3,9 @@
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE UnicodeSyntax         #-}
 
-module Semantic (module Semantic.Model, typecheck) where
+module Compiler.Semantic (module Compiler.Semantic.Model, typecheck) where
 
-import Semantic.Model
+import Compiler.Semantic.Model
 
 import Prelude                    hiding (foldl, foldr, id, (.))
 
@@ -18,14 +18,14 @@ import Data.Either
 import Data.Foldable
 import Data.Maybe
 import Data.Traversable
-import Parser
+import Compiler.Parser
 
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Error.Class
 import Control.Monad.RWS
-import Unique
-import UniqueFM
+import Compiler.Unique
+import Compiler.UniqueFM
 
 objectUnique = getUnique "Object"
 ioUnique = getUnique "IO"
